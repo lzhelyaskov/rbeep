@@ -1,5 +1,7 @@
-extern crate libc;
+// basic alternative to https://github.com/johnath/beep
+
 extern crate getopts;
+extern crate libc;
 
 use getopts::Options;
 
@@ -10,16 +12,21 @@ struct BeepOptions {
     verbose: bool,
 }
 
+const CLOCK_TICK_RATE: u32 = 1193180;
+const DEFAULT_FREQ: u32 = 440;
+const DEFAULT_DURATION: u32 = 1000;
 const KIOCSOUND: u64 = 0x4B2F; //start sound gen (0 -> off)
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let options = match parse_args(args) {
         Some(o) => o,
-        None => return,
+        None => return, // something bad has happend, or --help has been requested
     };
 
+    // TODO cap frequency and duration
     if !beep_so(options.freq, options.duration) {
+        // ioctl may need root
         if options.verbose {
             println!("failed. fallback to 'BELL'");
         }
@@ -35,7 +42,7 @@ pub trait Beep {
 pub struct BeepSo {}
 impl Beep for BeepSo {
     fn beep(&self, freq: u32) -> bool {
-        let f = if freq == 0 { 0 } else { 1193180 / freq };
+        let f = if freq == 0 { 0 } else { CLOCK_TICK_RATE / freq };
 
         unsafe {
             // TODO can fail
@@ -47,7 +54,6 @@ impl Beep for BeepSo {
 fn beep_so(freq: u32, duration: u32) -> bool {
     let beeper = BeepSo {};
     if !beeper.beep(freq) {
-        println!("test_beep_so: beep returned false");
         return false;
     }
     std::thread::sleep(std::time::Duration::from_millis(duration as u64));
@@ -55,22 +61,30 @@ fn beep_so(freq: u32, duration: u32) -> bool {
     true
 }
 
+// TODO return Result so print_error can be moved to main
 fn parse_args(args: Vec<String>) -> Option<BeepOptions> {
     let program = args[0].clone();
     let mut options = Options::new();
     options
-        .optflag("h", "help", "print this help")
+        .optflag("h", "help", "print this message")
         .optflag("v", "verbose", "print more info")
-        .optopt("f", "frequency", "sets desired frequency (min max)", "FREQ")
         .optopt(
+            "f",
+            "frequency",
+            "sets desired frequency (default 440)",
+            "FREQ",
+        ).optopt(
             "d",
             "duration",
-            "sets duration of a beep in ms",
-            "MILLISECONDS",
+            "sets duration of a beep in ms (default 1000)",
+            "MILLIS",
         );
     let matches = match options.parse(&args[1..]) {
         Ok(m) => m,
-        Err(f) => panic!(f.to_string()),
+        Err(e) => {
+            print_error(&e.to_string(), "parsing arguments failed", options);
+            return None;
+        }
     };
     if matches.opt_present("h") {
         print_usage(&program, options);
@@ -78,20 +92,18 @@ fn parse_args(args: Vec<String>) -> Option<BeepOptions> {
     }
     let verbose = matches.opt_present("v");
     let freq = match matches.opt_get::<u32>("f") {
-        Ok(f) => f.unwrap_or(440),
+        Ok(f) => f.unwrap_or(DEFAULT_FREQ),
         Err(e) => {
-            print_error(&e.to_string(), "frequency", options);
+            print_error(&e.to_string(), "parsing frequency failed", options);
             return None;
-            // panic!(e.to_string())
         }
     };
 
     let duration = match matches.opt_get::<u32>("d") {
-        Ok(d) => d.unwrap_or(1000),
+        Ok(d) => d.unwrap_or(DEFAULT_DURATION),
         Err(e) => {
-            print_error(&e.to_string(), "duration", options);
+            print_error(&e.to_string(), "parsing duration failed", options);
             return None;
-            // panic!(e.to_string())
         }
     };
 
@@ -107,7 +119,7 @@ fn print_usage(program: &str, opts: Options) {
     print!("{}", opts.usage(&brief));
 }
 
-fn print_error(err: &str, option: &str, opts: Options) {
-    let msg = format!("ERROR parsing option {} \n {}", option, err);
+fn print_error(err: &str, msg: &str, opts: Options) {
+    let msg = format!("ERROR {} \n {}", msg, err);
     print!("{}", opts.usage(&msg));
 }
